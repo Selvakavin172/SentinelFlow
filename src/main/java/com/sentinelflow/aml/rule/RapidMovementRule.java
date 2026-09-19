@@ -2,6 +2,7 @@
 package com.sentinelflow.aml.rule;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,14 +32,16 @@ public class RapidMovementRule implements AMLDetectionRule {
     @Override
     public RuleResult evaluate(Transaction transaction) {
 
-        RuleConfig config =
-                ruleConfigRepository.findByRuleCode("RAPID_MOVEMENT")
-                        .orElse(null);
+        // Load rule configuration
+        RuleConfig config = ruleConfigRepository
+                .findByRuleCode("RAPID_MOVEMENT")
+                .orElse(null);
 
         if (config == null || !config.isEnabled()) {
             return RuleResult.notTriggered("RAPID_MOVEMENT");
         }
 
+        // Validate transaction
         if (transaction == null
                 || transaction.getAccount() == null
                 || transaction.getAccount().getAccountId() == null
@@ -54,22 +57,21 @@ public class RapidMovementRule implements AMLDetectionRule {
                 transaction.getTransactionDatetime();
 
         int windowHours =
-                config.getWindowHours() == null
-                        ? 48
-                        : config.getWindowHours();
+                config.getWindowHours() != null
+                        ? config.getWindowHours()
+                        : 48;
 
         LocalDateTime start =
                 currentTime.minusHours(windowHours);
 
-        LocalDateTime end =
-                currentTime;
-
-        List<Transaction> transactions =
+        // Get only PREVIOUS transactions.
+        // Current transaction is not saved yet.
+        List<Transaction> previousTransactions =
                 transactionRepository
                         .findTransactionsByAccountAndTimeRange(
                                 accountId,
                                 start,
-                                end);
+                                currentTime);
 
         BigDecimal depositedAmount =
                 BigDecimal.ZERO;
@@ -80,90 +82,99 @@ public class RapidMovementRule implements AMLDetectionRule {
         List<Long> evidenceIds =
                 new ArrayList<>();
 
-        for (Transaction tx : transactions) {
+        // ------------------------------------------------
+        // Previous transactions
+        // ------------------------------------------------
+
+        for (Transaction tx : previousTransactions) {
+
+            if (tx.getAmount() == null) {
+                continue;
+            }
+
+            BigDecimal amount =
+                    tx.getAmountInr() != null
+                            ? tx.getAmountInr()
+                            : tx.getAmount();
+
+            if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
 
             if ("CREDIT".equalsIgnoreCase(
                     tx.getTransactionType())) {
 
-                BigDecimal amount =
-                        tx.getAmountInr() != null
-                                ? tx.getAmountInr()
-                                : tx.getAmount();
+                depositedAmount =
+                        depositedAmount.add(amount);
 
-                if (amount != null
-                        && amount.compareTo(BigDecimal.ZERO) > 0) {
+                if (tx.getTransactionId() != null) {
+                    evidenceIds.add(
+                            tx.getTransactionId());
+                }
+            }
 
-                    depositedAmount =
-                            depositedAmount.add(amount);
+            else if ("DEBIT".equalsIgnoreCase(
+                    tx.getTransactionType())) {
 
-                    if (tx.getTransactionId() != null) {
-                        evidenceIds.add(
-                                tx.getTransactionId());
-                    }
+                transferredAmount =
+                        transferredAmount.add(amount);
+
+                if (tx.getTransactionId() != null) {
+                    evidenceIds.add(
+                            tx.getTransactionId());
                 }
             }
         }
 
-        for (Transaction tx : transactions) {
+        // ------------------------------------------------
+        // Current transaction
+        // ------------------------------------------------
 
-            if ("DEBIT".equalsIgnoreCase(
-                    tx.getTransactionType())) {
+        BigDecimal currentAmount =
+                transaction.getAmountInr() != null
+                        ? transaction.getAmountInr()
+                        : transaction.getAmount();
 
-                BigDecimal amount =
-                        tx.getAmountInr() != null
-                                ? tx.getAmountInr()
-                                : tx.getAmount();
+        if (currentAmount == null
+                || currentAmount.compareTo(BigDecimal.ZERO) <= 0) {
 
-                if (amount != null
-                        && amount.compareTo(BigDecimal.ZERO) > 0) {
-
-                    transferredAmount =
-                            transferredAmount.add(amount);
-
-                    if (tx.getTransactionId() != null) {
-                        evidenceIds.add(
-                                tx.getTransactionId());
-                    }
-                }
-            }
+            return RuleResult.notTriggered(
+                    "RAPID_MOVEMENT");
         }
 
         if ("CREDIT".equalsIgnoreCase(
                 transaction.getTransactionType())) {
 
-            BigDecimal currentAmount =
-                    transaction.getAmountInr() != null
-                            ? transaction.getAmountInr()
-                            : transaction.getAmount();
-
-            if (currentAmount != null
-                    && currentAmount.compareTo(BigDecimal.ZERO) > 0) {
-
-                depositedAmount =
-                        depositedAmount.add(currentAmount);
-            }
+            depositedAmount =
+                    depositedAmount.add(currentAmount);
         }
 
-        if ("DEBIT".equalsIgnoreCase(
+        else if ("DEBIT".equalsIgnoreCase(
                 transaction.getTransactionType())) {
 
-            BigDecimal currentAmount =
-                    transaction.getAmountInr() != null
-                            ? transaction.getAmountInr()
-                            : transaction.getAmount();
-
-            if (currentAmount != null
-                    && currentAmount.compareTo(BigDecimal.ZERO) > 0) {
-
-                transferredAmount =
-                        transferredAmount.add(currentAmount);
-            }
+            transferredAmount =
+                    transferredAmount.add(currentAmount);
         }
 
-        if (depositedAmount.compareTo(BigDecimal.ZERO) <= 0) {
+        else {
             return RuleResult.notTriggered(
                     "RAPID_MOVEMENT");
         }
+
+        // ------------------------------------------------
+        // No deposits = no rapid movement
+        // ------------------------------------------------
+
+        if (depositedAmount.compareTo(
+                BigDecimal.ZERO) <= 0) {
+
+            return RuleResult.notTriggered(
+                    "RAPID_MOVEMENT");
+        }
+
+        // ------------------------------------------------
+        // Calculate percentage
+        // ------------------------------------------------
 
         BigDecimal percentage =
                 transferredAmount
@@ -171,7 +182,7 @@ public class RapidMovementRule implements AMLDetectionRule {
                         .divide(
                                 depositedAmount,
                                 2,
-                                java.math.RoundingMode.HALF_UP);
+                                RoundingMode.HALF_UP);
 
         BigDecimal threshold =
                 config.getThresholdValue();
@@ -183,24 +194,25 @@ public class RapidMovementRule implements AMLDetectionRule {
                     "RAPID_MOVEMENT");
         }
 
-        if (percentage.compareTo(threshold) >= 0) {
+        // ------------------------------------------------
+        // Trigger Rapid Movement
+        // ------------------------------------------------
 
-            if (transaction.getTransactionId() != null) {
-                evidenceIds.add(
-                        transaction.getTransactionId());
-            }
+        if (percentage.compareTo(threshold) >= 0) {
 
             return new RuleResult(
                     true,
                     "RAPID_MOVEMENT",
-                    "At least "
-                            + threshold
-                            + "% of deposited funds were transferred out within "
+                    "Transferred "
+                            + percentage
+                            + "% of deposited funds within "
                             + windowHours
-                            + " hours",
-                    config.getRiskScore() == null
-                            ? 0
-                            : config.getRiskScore(),
+                            + " hours. Threshold: "
+                            + threshold
+                            + "%",
+                    config.getRiskScore() != null
+                            ? config.getRiskScore()
+                            : 0,
                     evidenceIds
             );
         }
