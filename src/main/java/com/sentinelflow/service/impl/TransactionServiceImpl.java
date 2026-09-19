@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.sentinelflow.aml.rule.AmlDetectionEngine;
 import com.sentinelflow.dto.RuleResult;
+import com.sentinelflow.dto.TransactionListResponse;
 import com.sentinelflow.dto.TransactionRequest;
 import com.sentinelflow.dto.TransactionResponse;
 import com.sentinelflow.models.Account;
@@ -186,5 +187,38 @@ public class TransactionServiceImpl implements TransactionService {
 
         accountRepository.save(account);
     }
+
+    
+    private TransactionListResponse toResponse(Transaction transaction) {
+
+        TransactionListResponse response =
+                new TransactionListResponse();
+
+        response.setTransactionId(transaction.getTransactionId());
+        response.setAccountId(transaction.getAccount().getAccountId());
+        response.setTransactionType(transaction.getTransactionType());
+        response.setAmount(transaction.getAmount());
+        response.setCurrency(transaction.getCurrency());
+        response.setAmountInr(transaction.getAmountInr());
+        response.setTransactionDatetime(transaction.getTransactionDatetime());
+        response.setCountryCode(transaction.getCountryCode());
+        response.setChannel(transaction.getChannel());
+        response.setMerchantCategory(transaction.getMerchantCategory());
+        response.setCounterpartyName(transaction.getCounterpartyName());
+        response.setStatus(transaction.getStatus());
+        response.setIsHighRisk(transaction.getIsHighRisk());
+
+        return response;
+    }
+
+	@Override
+	public List<TransactionListResponse> getAllTransactions() {
+		 List<TransactionListResponse> transactions =
+	                transactionRepository.findAll()
+	                        .stream()
+	                        .map(this::toResponse)
+	                        .toList();
+		 return transactions;
+	}
 
 }
