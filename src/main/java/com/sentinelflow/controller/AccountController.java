@@ -3,27 +3,28 @@ package com.sentinelflow.controller;
 
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.sentinelflow.dto.AccountResponse;
 import com.sentinelflow.models.Account;
 import com.sentinelflow.repositories.AccountRepository;
+import com.sentinelflow.service.AccountService;
 
 @RestController
-@RequestMapping("/api/v1/accounts")
+@RequestMapping("/api/v1")
 public class AccountController {
 
-    private final AccountRepository accountRepository;
-
-    public AccountController(AccountRepository accountRepository) {
-        this.accountRepository = accountRepository;
+	@Autowired
+    private  AccountService accountService; 
+	
+    @GetMapping("/account/{id}")
+    public List<AccountResponse> getAllAccounts(@PathVariable("id") Long id) {
+    	List<AccountResponse> response=accountService.getAccountsByCustomerId(id);
+		return response;
     }
-
-    @GetMapping
-    public List<AccountResponse> getAllAccounts() {
-    	return accountRepository.findAll() .stream() .map(this::toResponse) .toList();
-    }
-    private AccountResponse toResponse(Account account) { AccountResponse response = new AccountResponse(); response.setAccountId(account.getAccountId()); response.setAccountNumber(account.getAccountNumber()); response.setAccountType(account.getAccountType()); response.setCurrency(account.getCurrency()); response.setCurrentBalance(account.getCurrentBalance()); return response; }
+    
 }
